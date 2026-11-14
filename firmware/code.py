@@ -2,7 +2,7 @@
 
 MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
 over the USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.1","crc":"..."}
+  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.2","crc":"..."}
   {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
   {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
   {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
@@ -19,7 +19,7 @@ import supervisor
 import usb_cdc
 import usb_midi
 
-FW_VERSION = "1.1"
+FW_VERSION = "1.2"
 CONFIG_FILE = "/config.json"
 PINS = (board.GP10, board.GP11, board.GP12)
 DEBOUNCE = 0.025

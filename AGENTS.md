@@ -69,7 +69,7 @@ Settings in `config.json` are kept across updates. If the drive is read-only ("m
 ## Serial protocol (data port, 115200, one JSON object per line)
 
 ```
-{"cmd":"ping"}                               -> {"ok":true,"fw":"1.1","crc":"..."}
+{"cmd":"ping"}                               -> {"ok":true,"fw":"1.2","crc":"..."}
 {"cmd":"get"}                                -> {"ok":true,"config":{"switches":[...3...]}}
 {"cmd":"set","config":{...}}                 -> {"ok":true}     (validated, saved to /config.json)
 {"cmd":"reset"}                              -> {"ok":true,"config":{...}}
@@ -91,6 +91,7 @@ Switch fields: `type` (`pc|pc_inc|pc_dec|cc|note`), `channel` 1-16, `number` 0-1
 ## Conventions
 
 - Keep firmware dependency-free (stdlib/CircuitPython built-ins only).
-- Keep protocol changes backward compatible; bump `FW_VERSION` in `code.py`.
+- **Always bump `FW_VERSION` in `firmware/code.py` whenever `firmware/code.py` is modified**, and upload the new version to the board if connected.
+- Keep protocol changes backward compatible.
 - Pin map must stay in sync across `firmware/code.py`, `firmware/boot.py`, `docs/`.
 - Hardware note: switches are normally-open momentary SPST (no resistors, active-low).
