@@ -2,9 +2,11 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 import serial
 from serial.tools import list_ports
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QMainWindow, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
@@ -192,6 +194,11 @@ class Main(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":  # own taskbar icon instead of python.exe's
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("midi.footswitch.programmer")
     app = QApplication(sys.argv)
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    app.setWindowIcon(QIcon(str(base / "assets" / "icon.png")))
     m = Main(); m.show()
     sys.exit(app.exec())

@@ -34,3 +34,7 @@ The micro-USB cable to the PC carries both power and USB-MIDI. Neural DSP should
 
 - Hold-to-use footswitches are normally open; either terminal works.
 - Add a 100 nF cap per switch later only if debounce in software isn't enough (not needed now).
+
+## Icon
+
+Rocket Launch icon from Google Material Symbols (Apache 2.0) on a gradient tile. Sources in `assets/`.

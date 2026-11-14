@@ -41,7 +41,10 @@ def run():
 
 def build():
     need_venv()
-    sh(PY, "-m", "PyInstaller", "--noconfirm", "--windowed", "--name", "MidiFootswitch", "gui/app.py")
+    icon = "assets/icon.ico" if sys.platform == "win32" else "assets/icon.png"
+    sep = ";" if sys.platform == "win32" else ":"
+    sh(PY, "-m", "PyInstaller", "--noconfirm", "--windowed", "--name", "MidiFootswitch",
+       "--icon", icon, "--add-data", "assets/icon.png" + sep + "assets", "gui/app.py")
     print("\nOutput in dist/")
 
 
