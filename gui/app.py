@@ -197,6 +197,17 @@ class SwitchEditor(QGroupBox):
         }
 
 
+def fmt_sw(s):
+    t = s["type"]
+    if t in ("pc_inc", "pc_dec"):
+        return "%s, Ch %d" % ("PC +1" if t == "pc_inc" else "PC -1", s["channel"])
+    if t == "pc":
+        return "PC #%d, Ch %d" % (s["number"], s["channel"])
+    return "%s #%d = %d (%s), Ch %d" % (
+        t.upper(), s["number"], s["value"], s["mode"], s["channel"]
+    )
+
+
 class Main(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -293,14 +304,53 @@ class Main(QMainWindow):
             self.status.setText("Settings read")
         self.guard(f)
 
-    def write(self):
+    def write(self, _checked=False, *, confirm=True):
         def f():
-            self.dev.call({"cmd": "set", "config": {"switches": [e.dump() for e in self.editors]}})
+            cur = self.dev.call({"cmd": "get"})["config"]["switches"]
+            new = [e.dump() for e in self.editors]
+            if cur == new:
+                self.status.setText("Settings on device already match the GUI")
+                if confirm:
+                    QMessageBox.information(
+                        self,
+                        "No changes",
+                        "Settings on the board already match the current GUI values.",
+                    )
+                return
+            if confirm:
+                diffs = [
+                    "Switch %d:\n  Board: %s\n  New:   %s" % (i + 1, fmt_sw(a), fmt_sw(b))
+                    for i, (a, b) in enumerate(zip(cur, new))
+                    if a != b
+                ]
+                reply = QMessageBox.question(
+                    self,
+                    "Confirm write to device",
+                    "Write new settings to the board?\n\n" + "\n\n".join(diffs),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.status.setText("Write cancelled")
+                    return
+            self.dev.call({"cmd": "set", "config": {"switches": new}})
             self.status.setText("Settings saved to device")
         self.guard(f)
 
-    def reset(self):
+    def reset(self, _checked=False, *, confirm=True):
         def f():
+            if confirm:
+                reply = QMessageBox.question(
+                    self,
+                    "Confirm factory defaults",
+                    "Reset all 3 switches on the board to factory defaults?\n\n"
+                    "This will overwrite your saved settings on the device.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.status.setText("Factory reset cancelled")
+                    return
             cfg = self.dev.call({"cmd": "reset"})["config"]
             for e, s in zip(self.editors, cfg["switches"]):
                 e.load(s)
