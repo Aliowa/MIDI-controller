@@ -26,9 +26,11 @@ Pin 13 is a GND pin right next to GP10-GP12. Terminal polarity doesn't matter on
 
 Leave GP4, GP5, 3V3 and pins 36/38 unused until a screen is added.
 
-## USB
+## USB & Firmware Updates
 
-The micro-USB cable to the PC carries both power and USB-MIDI. Neural DSP should see the board as a MIDI input.
+The micro-USB cable to the PC carries power, USB-MIDI, and the serial configuration channel. Neural DSP and Reaper see the board as a MIDI input (`CircuitPython Audio`).
+
+To update the board's firmware (`firmware/code.py`) without holding `BOOTSEL` or jumpering pins, open the GUI (`python tools/dev.py run`) and click **Update firmware**. Your saved switch settings (`config.json`) are preserved.
 
 ## Notes
 

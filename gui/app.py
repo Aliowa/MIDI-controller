@@ -1,4 +1,5 @@
 """MIDI footswitch programmer (Windows / macOS). Talks JSON-lines to the Pico data port."""
+import base64
 import json
 import sys
 import time
@@ -8,38 +9,60 @@ import serial
 from serial.tools import list_ports
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QApplication,
+    QComboBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
-TYPES = [("Program Change (fixed)", "pc"), ("Program Change +1 (next)", "pc_inc"),
-         ("Program Change -1 (prev)", "pc_dec"), ("Control Change (CC)", "cc"),
-         ("Note", "note")]
-MODES = [("Momentary (value on press, 0 on release)", "momentary"),
-         ("Toggle (value / 0 alternating)", "toggle"),
-         ("Trigger (value on press only)", "trigger")]
+BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+
+TYPES = [
+    ("Program Change (fixed)", "pc"),
+    ("Program Change +1 (next)", "pc_inc"),
+    ("Program Change -1 (prev)", "pc_dec"),
+    ("Control Change (CC)", "cc"),
+    ("Note", "note"),
+]
+MODES = [
+    ("Momentary (value on press, 0 on release)", "momentary"),
+    ("Toggle (value / 0 alternating)", "toggle"),
+    ("Trigger (value on press only)", "trigger"),
+]
 NAMES = ["Switch 1", "Switch 2", "Switch 3"]
 
 
 class Device:
     def __init__(self):
         self.ser = None
+        self.fw = None
 
-    def connect(self, quiet=False):
-        """Probe every serial port; the Pico's data channel answers a ping."""
+    def connect(self):
+        """Probe CircuitPython serial ports (data port first) for a ping reply."""
         self.close()
-        for p in list_ports.comports():
-            if p.vid != 0x239A:  # Adafruit / CircuitPython
-                continue
+        ports = [p for p in list_ports.comports() if p.vid == 0x239A]
+        # Prefer the second CDC interface (data port) so we don't poke the REPL console first
+        ports.sort(key=lambda p: (not (p.location or "").endswith(".0"), p.device), reverse=True)
+        for p in ports:
             try:
                 s = serial.Serial(p.device, 115200, timeout=0.6, write_timeout=1)
                 s.write(b'{"cmd":"ping"}\n')
-                if b'"fw"' in s.readline():
+                line = s.readline()
+                if b'"fw"' in line:
                     s.timeout = 3
                     self.ser = s
+                    self.fw = json.loads(line.decode()).get("fw", "?")
                     return p.device
                 s.close()
-            except (serial.SerialException, OSError):
+            except (serial.SerialException, OSError, ValueError):
                 pass
         return None
 
@@ -47,6 +70,7 @@ class Device:
         if self.ser:
             self.ser.close()
             self.ser = None
+        self.fw = None
 
     def call(self, msg):
         self.ser.reset_input_buffer()
@@ -55,6 +79,56 @@ class Device:
         if not resp.get("ok"):
             raise RuntimeError(resp.get("error", "device error"))
         return resp
+
+    def update_firmware(self, src):
+        """Upload new code.py over the data port (v1.1+), with REPL fallback for v1.0."""
+        chunk_size = 512
+        try:
+            for i in range(0, len(src), chunk_size):
+                self.call({"cmd": "fw_chunk", "reset": i == 0, "data": src[i:i + chunk_size]})
+            self.call({"cmd": "fw_commit"})
+            return
+        except RuntimeError as e:
+            if "unknown cmd" not in str(e):
+                raise
+        self._update_via_repl(src)
+
+    def _update_via_repl(self, src):
+        """Fallback for FW v1.0: write /code.py over the CircuitPython console port."""
+        data_port = self.ser.port if self.ser else None
+        ports = [
+            p.device for p in list_ports.comports()
+            if p.vid == 0x239A and p.device != data_port
+        ]
+        if not ports:
+            raise RuntimeError("Console serial port not found for v1.0 fallback update")
+        b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
+        with serial.Serial(ports[0], 115200, timeout=0.5, write_timeout=2) as repl:
+            repl.dtr = True
+            while repl.in_waiting:
+                repl.read(repl.in_waiting)
+            repl.write(b"\x03\x03")
+            time.sleep(0.3)
+            repl.write(b"\r\n")
+            time.sleep(0.3)
+            while repl.in_waiting:
+                repl.read(repl.in_waiting)
+
+            def send_line(line):
+                raw = (line + "\r\n").encode("ascii")
+                for i in range(0, len(raw), 64):
+                    repl.write(raw[i:i + 64])
+                    time.sleep(0.01)
+                    while repl.in_waiting:
+                        repl.read(repl.in_waiting)
+
+            send_line("import binascii")
+            send_line('f = open("/code.py", "wb")')
+            for i in range(0, len(b64), 120):
+                send_line('f.write(binascii.a2b_base64("%s"))' % b64[i:i + 120])
+            send_line("f.close()")
+            repl.write(b"\x04")
+            time.sleep(0.2)
 
 
 class SwitchEditor(QGroupBox):
@@ -66,13 +140,21 @@ class SwitchEditor(QGroupBox):
         self.mode = QComboBox()
         for label, v in MODES:
             self.mode.addItem(label, v)
-        self.channel = QSpinBox(); self.channel.setRange(1, 16)
-        self.number = QSpinBox(); self.number.setRange(0, 127)
-        self.value = QSpinBox(); self.value.setRange(0, 127)
+        self.channel = QSpinBox()
+        self.channel.setRange(1, 16)
+        self.number = QSpinBox()
+        self.number.setRange(0, 127)
+        self.value = QSpinBox()
+        self.value.setRange(0, 127)
         g = QGridLayout(self)
-        for r, (name, w) in enumerate([("Message", self.type), ("Channel", self.channel),
-                                       ("Number (PC / CC / note)", self.number),
-                                       ("Value", self.value), ("Mode", self.mode)]):
+        fields = [
+            ("Message", self.type),
+            ("Channel", self.channel),
+            ("Number (PC / CC / note)", self.number),
+            ("Value", self.value),
+            ("Mode", self.mode),
+        ]
+        for r, (name, w) in enumerate(fields):
             g.addWidget(QLabel(name), r, 0)
             g.addWidget(w, r, 1)
         self.type.currentIndexChanged.connect(self._update)
@@ -92,9 +174,13 @@ class SwitchEditor(QGroupBox):
         self.value.setValue(s["value"])
 
     def dump(self):
-        return {"type": self.type.currentData(), "mode": self.mode.currentData(),
-                "channel": self.channel.value(), "number": self.number.value(),
-                "value": self.value.value()}
+        return {
+            "type": self.type.currentData(),
+            "mode": self.mode.currentData(),
+            "channel": self.channel.value(),
+            "number": self.number.value(),
+            "value": self.value.value(),
+        }
 
 
 class Main(QMainWindow):
@@ -107,20 +193,35 @@ class Main(QMainWindow):
         self.led.setFixedSize(18, 18)
         self.set_led(False)
         self.editors = [SwitchEditor(n) for n in NAMES]
-        self.btn_conn = QPushButton("Connect"); self.btn_conn.clicked.connect(self.toggle_connection)
-        btn_read = QPushButton("Read from device"); btn_read.clicked.connect(self.read)
-        btn_write = QPushButton("Write to device"); btn_write.clicked.connect(self.write)
-        btn_reset = QPushButton("Factory defaults"); btn_reset.clicked.connect(self.reset)
+
+        self.btn_conn = QPushButton("Connect")
+        self.btn_conn.clicked.connect(self.toggle_connection)
+        btn_read = QPushButton("Read from device")
+        btn_read.clicked.connect(self.read)
+        btn_write = QPushButton("Write to device")
+        btn_write.clicked.connect(self.write)
+        btn_reset = QPushButton("Factory defaults")
+        btn_reset.clicked.connect(self.reset)
+        btn_fw = QPushButton("Update firmware")
+        btn_fw.clicked.connect(self.update_fw)
+
         bar = QHBoxLayout()
-        for b in (self.btn_conn, btn_read, btn_write, btn_reset):
+        for b in (self.btn_conn, btn_read, btn_write, btn_reset, btn_fw):
             bar.addWidget(b)
         row = QHBoxLayout()
         for e in self.editors:
             row.addWidget(e)
+        foot = QHBoxLayout()
+        foot.addWidget(self.led)
+        foot.addWidget(self.status, 1)
+
         root = QVBoxLayout()
-        foot = QHBoxLayout(); foot.addWidget(self.led); foot.addWidget(self.status, 1)
-        root.addLayout(bar); root.addLayout(row); root.addLayout(foot)
-        w = QWidget(); w.setLayout(root); self.setCentralWidget(w)
+        root.addLayout(bar)
+        root.addLayout(row)
+        root.addLayout(foot)
+        w = QWidget()
+        w.setLayout(root)
+        self.setCentralWidget(w)
         self.connect(quiet=True)  # one attempt at app start, never again automatically
 
     def set_led(self, on):
@@ -162,8 +263,8 @@ class Main(QMainWindow):
             self.set_led(True)
             self.btn_conn.setText("Disconnect")
             self.read()
-            self.status.setText("Connected on %s - settings loaded  [%s]"
-                                % (port, time.strftime("%H:%M:%S")))
+            self.status.setText("Connected on %s (FW v%s) - settings loaded  [%s]"
+                                % (port, self.dev.fw, time.strftime("%H:%M:%S")))
         else:
             self.set_led(False)
             self.status.setText("Device not found (plugged in, not in BOOTSEL, no other program using the port?)")
@@ -192,14 +293,29 @@ class Main(QMainWindow):
             self.status.setText("Defaults restored")
         self.guard(f)
 
+    def update_fw(self):
+        def f():
+            fw_path = BASE_DIR / "firmware" / "code.py"
+            if not fw_path.exists():
+                raise RuntimeError("firmware/code.py not found")
+            self.status.setText("Uploading firmware to device...")
+            QApplication.processEvents()
+            self.dev.update_firmware(fw_path.read_text(encoding="utf-8"))
+            self.disconnect()
+            self.status.setText("Rebooting device with new firmware...")
+            QApplication.processEvents()
+            time.sleep(1.8)
+            self.connect()
+        self.guard(f)
+
 
 if __name__ == "__main__":
     if sys.platform == "win32":  # own taskbar icon instead of python.exe's
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Aliowa.MidiFootswitch.Programmer.1")
     app = QApplication(sys.argv)
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     icon_file = "icon.ico" if sys.platform == "win32" else "icon.png"
-    app.setWindowIcon(QIcon(str(base / "assets" / icon_file)))
-    m = Main(); m.show()
+    app.setWindowIcon(QIcon(str(BASE_DIR / "assets" / icon_file)))
+    m = Main()
+    m.show()
     sys.exit(app.exec())

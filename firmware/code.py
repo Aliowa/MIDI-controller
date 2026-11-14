@@ -1,11 +1,13 @@
 """3-switch USB MIDI footswitch controller (Pico 2 W, CircuitPython).
 
-MIDI goes out over USB-MIDI. Settings are changed from the GUI over the
-USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                      -> {"ok":true,"fw":"1.0"}
-  {"cmd":"get"}                       -> {"ok":true,"config":{...}}
-  {"cmd":"set","config":{...}}        -> {"ok":true}   (validated + saved)
-  {"cmd":"reset"}                     -> {"ok":true,"config":{...}} (defaults)
+MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
+over the USB serial "data" channel using one JSON message per line:
+  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.1"}
+  {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
+  {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
+  {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
+  {"cmd":"fw_chunk","reset":bool,"data":"..."}    -> {"ok":true}   (buffers firmware over USB)
+  {"cmd":"fw_commit"}                             -> {"ok":true}   (validates, writes /code.py, reloads)
 """
 import json
 import time
@@ -16,10 +18,11 @@ import supervisor
 import usb_cdc
 import usb_midi
 
-FW_VERSION = "1.0"
+FW_VERSION = "1.1"
 CONFIG_FILE = "/config.json"
 PINS = (board.GP10, board.GP11, board.GP12)
 DEBOUNCE = 0.025
+MAX_RX = 4096
 
 # type: pc | pc_inc | pc_dec | cc | note
 # mode (cc/note): momentary (value on press, 0 on release) | toggle | trigger
@@ -65,13 +68,22 @@ def load_config():
         return json.loads(json.dumps(DEFAULT_CONFIG))
 
 
+def write_flash(path, text):
+    try:
+        with open(path, "w") as f:
+            f.write(text)
+    except OSError as e:
+        raise RuntimeError(
+            "Flash is read-only (dev mode). Replug without holding SW1."
+        ) from e
+
+
 def save_config(cfg):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f)
+    write_flash(CONFIG_FILE, json.dumps(cfg))
 
 
 config = load_config()
-midi = usb_midi.ports[1]
+midi = usb_midi.ports[1] if len(usb_midi.ports) > 1 else None
 serial = usb_cdc.data
 
 buttons = []
@@ -84,11 +96,14 @@ state = [False] * 3        # debounced pressed state
 last_raw = [False] * 3
 last_change = [0.0] * 3
 toggled = [False] * 3
+active_press = [None] * 3  # (status_byte, number) held in momentary mode
 pc_current = [0] * 16      # per-channel program counter for pc_inc / pc_dec
+fw_buf = []
 
 
 def send(status, d1, d2=None):
-    midi.write(bytes([status, d1] if d2 is None else [status, d1, d2]))
+    if midi:
+        midi.write(bytes([status, d1] if d2 is None else [status, d1, d2]))
 
 
 def on_press(i):
@@ -105,27 +120,30 @@ def on_press(i):
         pc_current[ch] = (pc_current[ch] - 1) % 128
         send(0xC0 | ch, pc_current[ch])
     else:
-        status = 0xB0 if t == "cc" else 0x90
+        status = (0xB0 if t == "cc" else 0x90) | ch
         if s["mode"] == "toggle":
             toggled[i] = not toggled[i]
             val = s["value"] if toggled[i] else 0
         else:
             val = s["value"]
-        send(status | ch, s["number"], val)
+            if s["mode"] == "momentary":
+                active_press[i] = (status, s["number"])
+        send(status, s["number"], val)
 
 
 def on_release(i):
-    s = config["switches"][i]
-    if s["type"] in ("cc", "note") and s["mode"] == "momentary":
-        status = 0xB0 if s["type"] == "cc" else 0x90
-        send(status | (s["channel"] - 1), s["number"], 0)
+    if active_press[i] is not None:
+        status, num = active_press[i]
+        active_press[i] = None
+        send(status, num, 0)
 
 
 rx = b""
 
 
 def reply(obj):
-    serial.write((json.dumps(obj) + "\n").encode())
+    if serial:
+        serial.write((json.dumps(obj) + "\n").encode())
 
 
 def handle(line):
@@ -139,13 +157,30 @@ def handle(line):
             reply({"ok": True, "config": config})
         elif cmd == "set":
             new = validate(msg["config"])
-            save_config(new)
             config = new
+            toggled[:] = [False] * 3
+            save_config(new)
             reply({"ok": True})
         elif cmd == "reset":
             config = json.loads(json.dumps(DEFAULT_CONFIG))
+            toggled[:] = [False] * 3
             save_config(config)
             reply({"ok": True, "config": config})
+        elif cmd == "fw_chunk":
+            if msg.get("reset"):
+                fw_buf.clear()
+            fw_buf.append(msg["data"])
+            reply({"ok": True})
+        elif cmd == "fw_commit":
+            src = "".join(fw_buf)
+            fw_buf.clear()
+            if not src.strip():
+                raise ValueError("empty firmware")
+            compile(src, "code.py", "exec")
+            write_flash("/code.py", src)
+            reply({"ok": True})
+            time.sleep(0.05)
+            supervisor.reload()
         else:
             reply({"ok": False, "error": "unknown cmd"})
     except Exception as e:  # keep running no matter what the host sends
@@ -165,7 +200,11 @@ while True:
 
     if serial and serial.in_waiting:
         rx += serial.read(serial.in_waiting)
+        if len(rx) > MAX_RX:
+            rx = b""
         while b"\n" in rx:
             line, rx = rx.split(b"\n", 1)
             if line.strip():
-                handle(line.decode())
+                handle(line.decode("utf-8", "replace"))
+
+    time.sleep(0.001)

@@ -44,7 +44,10 @@ def build():
     icon = "assets/icon.ico" if sys.platform == "win32" else "assets/icon.png"
     sep = ";" if sys.platform == "win32" else ":"
     sh(PY, "-m", "PyInstaller", "--noconfirm", "--windowed", "--name", "MidiFootswitch",
-       "--icon", icon, "--add-data", "assets" + sep + "assets", "gui/app.py")
+       "--icon", icon,
+       "--add-data", "assets" + sep + "assets",
+       "--add-data", "firmware" + sep + "firmware",
+       "gui/app.py")
     print("\nOutput in dist/")
 
 

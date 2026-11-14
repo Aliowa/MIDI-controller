@@ -39,6 +39,24 @@ macOS: if setup fails installing PySide6, use python.org Python 3.11+ (not the s
 3. Copy `firmware/boot.py` and `firmware/code.py` to `CIRCUITPY`.
 4. **Hard reset** (unplug/replug). `boot.py` only runs on hard reset, not on save.
 
+## Updating firmware on an already-flashed board
+
+### From the GUI (one click, no jumper needed)
+
+1. Open the GUI (`python tools/dev.py run`), connect to the board, and click **Update firmware**.
+2. The GUI sends `firmware/code.py` over the USB serial data port (`fw_chunk` + `fw_commit`).
+3. The board syntax-checks the file, writes `/code.py` to flash, soft-reloads, and the GUI reconnects showing the new `FW vX.Y` in the status bar. Settings in `config.json` are kept.
+
+### Manual fallback (USB drive / dev mode)
+
+1. Unplug USB. Hold **SW1** (or jumper **GP10, pin 14, to GND, pin 13**).
+2. Plug USB in while holding, then release after 2 s. `CIRCUITPY` now shows up **writable** (dev mode).
+3. Copy `firmware/code.py` (and `firmware/boot.py` if it changed) onto `CIRCUITPY`, overwriting. The board restarts the code by itself.
+4. Unplug, remove the jumper / release SW1, plug in again (normal mode, drive read-only to PC, settings can be saved).
+5. Connect in the GUI: the status bar shows `FW vX.Y`. It must match `FW_VERSION` in `code.py`.
+
+Settings in `config.json` are kept across updates. If the drive is read-only ("media is write protected"), you were not in dev mode.
+
 ## IMPORTANT behaviors
 
 - After `boot.py` runs, `CIRCUITPY` is **read-only to the PC** (so the firmware can save `config.json`). To edit firmware files: hold **SW1 (GP10 to GND)** while plugging in. If no switch is wired, jumper GP10 (pin 14) to GND (pin 13).
@@ -51,10 +69,12 @@ macOS: if setup fails installing PySide6, use python.org Python 3.11+ (not the s
 ## Serial protocol (data port, 115200, one JSON object per line)
 
 ```
-{"cmd":"ping"}                  -> {"ok":true,"fw":"1.0"}
-{"cmd":"get"}                   -> {"ok":true,"config":{"switches":[...3...]}}
-{"cmd":"set","config":{...}}    -> {"ok":true}     (validated, saved to /config.json)
-{"cmd":"reset"}                 -> {"ok":true,"config":{...}}
+{"cmd":"ping"}                               -> {"ok":true,"fw":"1.1"}
+{"cmd":"get"}                                -> {"ok":true,"config":{"switches":[...3...]}}
+{"cmd":"set","config":{...}}                 -> {"ok":true}     (validated, saved to /config.json)
+{"cmd":"reset"}                              -> {"ok":true,"config":{...}}
+{"cmd":"fw_chunk","reset":bool,"data":"..."} -> {"ok":true}     (buffers firmware in RAM)
+{"cmd":"fw_commit"}                          -> {"ok":true}     (syntax-checks, writes /code.py, reloads)
 ```
 
 Switch fields: `type` (`pc|pc_inc|pc_dec|cc|note`), `channel` 1-16, `number` 0-127, `value` 0-127, `mode` (`momentary|toggle|trigger`).
