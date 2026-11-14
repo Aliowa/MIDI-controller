@@ -2,6 +2,10 @@
 
 Schematic: [schematic.svg](schematic.svg)
 
+Semi-realistic wiring diagram: [wiring-real.png](wiring-real.png)
+
+![Wiring diagram](wiring-real.png)
+
 ## Wiring (no resistors, no extra parts)
 
 Each switch is a 2-terminal momentary SPST. One terminal goes to a GPIO, the other to GND. Enable the GPIO internal pull-up in firmware (`Pull.UP`). Pressed = LOW.

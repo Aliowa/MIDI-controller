@@ -1,85 +1,111 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="Consolas, monospace" font-size="14">
-  <rect width="900" height="520" fill="#fff"/>
-  <text x="450" y="28" text-anchor="middle" font-size="18" font-weight="bold">3-Switch USB MIDI Controller (Pico 2 W) - NeuralDSP</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" font-family="Consolas, monospace" font-size="13">
+  <rect width="960" height="580" fill="#fff"/>
 
-  <!-- Pico -->
-  <rect x="330" y="60" width="200" height="400" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
-  <text x="430" y="90" text-anchor="middle" font-weight="bold">Raspberry Pi Pico 2 W</text>
-  <text x="430" y="108" text-anchor="middle" font-size="12">(USB up, micro-USB to PC)</text>
+  <!-- Title & subtitle -->
+  <text x="480" y="28" text-anchor="middle" font-size="18" font-weight="bold">3-Switch USB MIDI Controller (Pico 2 W) - NeuralDSP</text>
+  <text x="480" y="48" text-anchor="middle" font-size="12" fill="#555">No resistors: GPIOs use internal pull-ups; pressing a switch connects GPIO to GND (active-low)</text>
 
-  <!-- Left side pins: switches -->
-  <g stroke="#000" stroke-width="2" fill="none">
-    <line x1="290" y1="160" x2="330" y2="160"/>
-    <line x1="290" y1="200" x2="330" y2="200"/>
-    <line x1="290" y1="240" x2="330" y2="240"/>
-    <line x1="290" y1="290" x2="330" y2="290"/>
+  <!-- USB connector at top -->
+  <text x="470" y="68" text-anchor="middle" font-size="11" fill="#333">to PC (USB-MIDI + power)</text>
+  <rect x="425" y="74" width="90" height="26" rx="3" fill="#ddd" stroke="#000" stroke-width="2"/>
+  <text x="470" y="92" text-anchor="middle" font-size="12" font-weight="bold">micro-USB</text>
+
+  <!-- Raspberry Pi Pico 2 W board -->
+  <rect x="360" y="100" width="220" height="440" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <text x="470" y="124" text-anchor="middle" font-weight="bold" font-size="14">Raspberry Pi Pico 2 W</text>
+  <text x="470" y="140" text-anchor="middle" font-size="11" fill="#2e7d32">(USB at top, pin 1 top-left)</text>
+
+  <!-- Pico pin pads (left side: pins 6, 7, 13, 14, 15, 16) -->
+  <g fill="#f9a825" stroke="#333" stroke-width="1">
+    <circle cx="366" cy="175" r="4"/>
+    <circle cx="366" cy="205" r="4"/>
+    <circle cx="366" cy="315" r="4"/>
+    <circle cx="366" cy="365" r="4"/>
+    <circle cx="366" cy="425" r="4"/>
+    <circle cx="366" cy="485" r="4"/>
   </g>
-  <text x="338" y="165" font-size="12">GP10 (pin 14)</text>
-  <text x="338" y="205" font-size="12">GP11 (pin 15)</text>
-  <text x="338" y="245" font-size="12">GP12 (pin 16)</text>
-  <text x="338" y="295" font-size="12">GND (pin 13)</text>
+  <text x="376" y="179" font-size="11">GP4 (pin 6)</text>
+  <text x="376" y="209" font-size="11">GP5 (pin 7)</text>
+  <text x="376" y="319" font-size="11" font-weight="bold">GND (pin 13)</text>
+  <text x="376" y="369" font-size="11">GP10 (pin 14)</text>
+  <text x="376" y="429" font-size="11">GP11 (pin 15)</text>
+  <text x="376" y="489" font-size="11">GP12 (pin 16)</text>
 
-  <!-- Switch wires -->
-  <g stroke="#1565c0" stroke-width="2" fill="none">
-    <line x1="290" y1="160" x2="190" y2="160"/>
-    <line x1="290" y1="200" x2="190" y2="200"/>
-    <line x1="290" y1="240" x2="190" y2="240"/>
+  <!-- Pico pin pads (right side: pins 38, 36) -->
+  <g fill="#f9a825" stroke="#333" stroke-width="1">
+    <circle cx="574" cy="160" r="4"/>
+    <circle cx="574" cy="190" r="4"/>
   </g>
-  <g stroke="#000" stroke-width="2" fill="none">
-    <line x1="290" y1="290" x2="60" y2="290"/>
-    <line x1="60" y1="190" x2="60" y2="400"/>
-    <line x1="60" y1="190" x2="90" y2="190"/>
+  <text x="564" y="164" text-anchor="end" font-size="11">GND (pin 38)</text>
+  <text x="564" y="194" text-anchor="end" font-size="11">3V3 OUT (pin 36)</text>
+
+  <!-- Switch signal wires (blue) -->
+  <g stroke="#1565c0" stroke-width="2.5" fill="none">
+    <line x1="360" y1="365" x2="220" y2="365"/>
+    <line x1="360" y1="425" x2="220" y2="425"/>
+    <line x1="360" y1="485" x2="220" y2="485"/>
   </g>
 
-  <!-- Switches SW1..SW3 -->
-  <g stroke="#000" stroke-width="2" fill="#fff">
-    <circle cx="190" cy="160" r="4"/><circle cx="100" cy="160" r="4"/>
-    <line x1="104" y1="160" x2="170" y2="145"/>
-    <circle cx="190" cy="200" r="4"/><circle cx="100" cy="200" r="4"/>
-    <line x1="104" y1="200" x2="170" y2="185"/>
-    <circle cx="190" cy="240" r="4"/><circle cx="100" cy="240" r="4"/>
-    <line x1="104" y1="240" x2="170" y2="225"/>
+  <!-- Common GND bus (black) -->
+  <g stroke="#000" stroke-width="2.5" fill="none">
+    <polyline points="360,315 65,315 65,525"/>
+    <line x1="65" y1="365" x2="120" y2="365"/>
+    <line x1="65" y1="425" x2="120" y2="425"/>
+    <line x1="65" y1="485" x2="120" y2="485"/>
   </g>
-  <text x="140" y="135" text-anchor="middle" font-size="12">SW1 (Prev / Bank-)</text>
-  <text x="140" y="178" text-anchor="middle" font-size="12" fill="#555">SW2 (Next / Bank+)</text>
-  <text x="140" y="262" text-anchor="middle" font-size="12">SW3 (Tap / Tuner)</text>
-  <g stroke="#000" stroke-width="2" fill="none">
-    <line x1="96" y1="160" x2="60" y2="160"/><line x1="96" y1="200" x2="60" y2="200"/><line x1="96" y1="240" x2="60" y2="240"/>
-    <line x1="60" y1="160" x2="60" y2="400"/>
+  <!-- Junction dots on GND bus -->
+  <g fill="#000">
+    <circle cx="65" cy="365" r="3.5"/>
+    <circle cx="65" cy="425" r="3.5"/>
+    <circle cx="65" cy="485" r="3.5"/>
   </g>
-  <!-- ground symbol -->
-  <g stroke="#000" stroke-width="2">
-    <line x1="60" y1="400" x2="60" y2="415"/>
-    <line x1="42" y1="415" x2="78" y2="415"/>
-    <line x1="48" y1="422" x2="72" y2="422"/>
-    <line x1="54" y1="429" x2="66" y2="429"/>
+
+  <!-- Switches SW1..SW3 (SPST normally-open momentary) -->
+  <g stroke="#000" stroke-width="2.2" fill="#fff">
+    <!-- SW1 -->
+    <line x1="124" y1="365" x2="206" y2="348"/>
+    <circle cx="120" cy="365" r="4.5"/>
+    <circle cx="220" cy="365" r="4.5"/>
+    <!-- SW2 -->
+    <line x1="124" y1="425" x2="206" y2="408"/>
+    <circle cx="120" cy="425" r="4.5"/>
+    <circle cx="220" cy="425" r="4.5"/>
+    <!-- SW3 -->
+    <line x1="124" y1="485" x2="206" y2="468"/>
+    <circle cx="120" cy="485" r="4.5"/>
+    <circle cx="220" cy="485" r="4.5"/>
   </g>
-  <text x="60" y="450" text-anchor="middle" font-size="12">GND (common)</text>
+  <text x="170" y="341" text-anchor="middle" font-size="12" font-weight="bold">SW1 (Prev / Bank-)</text>
+  <text x="170" y="401" text-anchor="middle" font-size="12" font-weight="bold">SW2 (Next / Bank+)</text>
+  <text x="170" y="461" text-anchor="middle" font-size="12" font-weight="bold">SW3 (Tap / Tuner)</text>
 
-  <!-- Right side: reserved header for future screen -->
-  <g stroke="#6a1b9a" stroke-width="2" stroke-dasharray="6 4" fill="none">
-    <line x1="530" y1="160" x2="620" y2="160"/>
-    <line x1="530" y1="200" x2="620" y2="200"/>
-    <line x1="530" y1="260" x2="620" y2="260"/>
-    <line x1="530" y1="300" x2="620" y2="300"/>
+  <!-- Ground symbol -->
+  <g stroke="#000" stroke-width="2.2">
+    <line x1="65" y1="525" x2="65" y2="538"/>
+    <line x1="47" y1="538" x2="83" y2="538"/>
+    <line x1="53" y1="545" x2="77" y2="545"/>
+    <line x1="59" y1="552" x2="71" y2="552"/>
   </g>
-  <text x="522" y="165" text-anchor="end" font-size="12">GP4 (pin 6)</text>
-  <text x="522" y="205" text-anchor="end" font-size="12">GP5 (pin 7)</text>
-  <text x="522" y="265" text-anchor="end" font-size="12">3V3 OUT (pin 36)</text>
-  <text x="522" y="305" text-anchor="end" font-size="12">GND (pin 38)</text>
+  <text x="65" y="568" text-anchor="middle" font-size="12">GND (common)</text>
 
-  <rect x="620" y="130" width="230" height="200" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="6 4"/>
-  <text x="735" y="152" text-anchor="middle" font-weight="bold" fill="#6a1b9a">J_SCREEN (reserved, empty)</text>
-  <text x="640" y="165" font-size="12">1  SDA  &lt;- GP4</text>
-  <text x="640" y="205" font-size="12">2  SCL  &lt;- GP5</text>
-  <text x="640" y="265" font-size="12">3  3V3</text>
-  <text x="640" y="305" font-size="12">4  GND</text>
-  <text x="735" y="325" text-anchor="middle" font-size="11" fill="#555">4-pin I2C header, nothing connected yet</text>
+  <!-- Reserved screen header box on right -->
+  <rect x="665" y="150" width="265" height="215" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="797" y="174" text-anchor="middle" font-weight="bold" font-size="13" fill="#6a1b9a">J_SCREEN (reserved, empty)</text>
+  <text x="685" y="244" font-size="12">1  SDA  &lt;- GP4 (pin 6)</text>
+  <text x="685" y="274" font-size="12">2  SCL  &lt;- GP5 (pin 7)</text>
+  <text x="685" y="304" font-size="12">3  3V3  &lt;- 3V3 OUT (pin 36)</text>
+  <text x="685" y="334" font-size="12">4  GND  &lt;- GND (pin 38)</text>
+  <text x="797" y="355" text-anchor="middle" font-size="10.5" fill="#555">4-pin I2C header, nothing connected yet</text>
 
-  <!-- USB -->
-  <rect x="385" y="460" width="90" height="30" fill="#ddd" stroke="#000" stroke-width="2"/>
-  <text x="430" y="480" text-anchor="middle" font-size="12">micro-USB</text>
-  <text x="430" y="510" text-anchor="middle" font-size="12">to PC (USB-MIDI + power)</text>
-
-  <text x="450" y="55" text-anchor="middle" font-size="12" fill="#555">No resistors: GPIOs use internal pull-ups; pressing a switch connects GPIO to GND (active-low)</text>
+  <!-- Reserved dashed purple routing -->
+  <g stroke="#6a1b9a" stroke-width="1.8" stroke-dasharray="6 4" fill="none">
+    <!-- GP4 (pin 6) left edge -> across empty middle of board -> J_SCREEN pin 1 -->
+    <polyline points="360,175 322,175 322,240 665,240"/>
+    <!-- GP5 (pin 7) left edge -> across empty middle of board -> J_SCREEN pin 2 -->
+    <polyline points="360,205 336,205 336,270 665,270"/>
+    <!-- 3V3 OUT (pin 36) right edge -> J_SCREEN pin 3 -->
+    <polyline points="580,190 618,190 618,300 665,300"/>
+    <!-- GND (pin 38) right edge -> J_SCREEN pin 4 -->
+    <polyline points="580,160 638,160 638,330 665,330"/>
+  </g>
 </svg>
