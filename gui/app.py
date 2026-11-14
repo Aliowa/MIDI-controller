@@ -196,9 +196,10 @@ class Main(QMainWindow):
 if __name__ == "__main__":
     if sys.platform == "win32":  # own taskbar icon instead of python.exe's
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("midi.footswitch.programmer")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Aliowa.MidiFootswitch.Programmer.1")
     app = QApplication(sys.argv)
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-    app.setWindowIcon(QIcon(str(base / "assets" / "icon.png")))
+    icon_file = "icon.ico" if sys.platform == "win32" else "icon.png"
+    app.setWindowIcon(QIcon(str(base / "assets" / icon_file)))
     m = Main(); m.show()
     sys.exit(app.exec())
