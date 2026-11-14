@@ -9,7 +9,8 @@ from pathlib import Path
 
 import serial
 from serial.tools import list_ports
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -19,7 +20,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -51,10 +54,12 @@ def inspect_firmware(src):
 
 
 class Device:
-    def __init__(self):
+    def __init__(self, on_event=None):
         self.ser = None
         self.fw = None
         self.crc = None
+        self.on_event = on_event
+        self._rx = b""
 
     def connect(self):
         """Probe CircuitPython serial ports (data port first) for a ping reply."""
@@ -65,11 +70,14 @@ class Device:
         for p in ports:
             try:
                 s = serial.Serial(p.device, 115200, timeout=0.6, write_timeout=1)
+                s.dtr = True
+                s.reset_input_buffer()
                 s.write(b'{"cmd":"ping"}\n')
                 line = s.readline()
                 if b'"fw"' in line:
                     s.timeout = 3
                     self.ser = s
+                    self._rx = b""
                     info = json.loads(line.decode())
                     self.fw = info.get("fw", "?")
                     self.crc = info.get("crc", "")
@@ -81,18 +89,58 @@ class Device:
 
     def close(self):
         if self.ser:
+            try:
+                self.ser.dtr = False
+            except Exception:
+                pass
             self.ser.close()
             self.ser = None
+        self._rx = b""
         self.fw = None
         self.crc = None
 
+    def poll_events(self):
+        if not self.ser:
+            return
+        n = self.ser.in_waiting
+        if not n:
+            return
+        self._rx += self.ser.read(n)
+        while b"\n" in self._rx:
+            line, self._rx = self._rx.split(b"\n", 1)
+            if not line.strip():
+                continue
+            try:
+                msg = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if "event" in msg and self.on_event:
+                self.on_event(msg)
+
+    def _next_line(self):
+        if b"\n" not in self._rx:
+            self._rx += self.ser.readline()
+        if b"\n" not in self._rx:
+            self._rx = b""
+            return b""
+        line, self._rx = self._rx.split(b"\n", 1)
+        return line
+
     def call(self, msg):
-        self.ser.reset_input_buffer()
+        self.poll_events()
         self.ser.write((json.dumps(msg) + "\n").encode())
-        resp = json.loads(self.ser.readline().decode())
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", "device error"))
-        return resp
+        while True:
+            line = self._next_line()
+            if not line:
+                raise RuntimeError("device timeout")
+            resp = json.loads(line.decode("utf-8", "replace"))
+            if "event" in resp:
+                if self.on_event:
+                    self.on_event(resp)
+                continue
+            if not resp.get("ok"):
+                raise RuntimeError(resp.get("error", "device error"))
+            return resp
 
     def update_firmware(self, src):
         """Upload new code.py over the data port (v1.1+), with REPL fallback for v1.0."""
@@ -148,6 +196,7 @@ class Device:
 class SwitchEditor(QGroupBox):
     def __init__(self, title):
         super().__init__(title)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.type = QComboBox()
         for label, v in TYPES:
             self.type.addItem(label, v)
@@ -208,11 +257,15 @@ def fmt_sw(s):
     )
 
 
+def fmt_cfg(switches):
+    return " | ".join("SW%d: %s" % (i + 1, fmt_sw(s)) for i, s in enumerate(switches))
+
+
 class Main(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MIDI Footswitch Programmer")
-        self.dev = Device()
+        self.dev = Device(on_event=self.on_device_event)
         self.status = QLabel("Not connected")
         self.led = QLabel()
         self.led.setFixedSize(18, 18)
@@ -230,6 +283,15 @@ class Main(QMainWindow):
         btn_fw = QPushButton("Update firmware")
         btn_fw.clicked.connect(self.update_fw)
 
+        console_box = QGroupBox("Debug console")
+        self.console = QPlainTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setMaximumBlockCount(500)
+        self.console.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.console.setMinimumHeight(110)
+        cl = QVBoxLayout(console_box)
+        cl.addWidget(self.console)
+
         bar = QHBoxLayout()
         for b in (self.btn_conn, btn_read, btn_write, btn_reset, btn_fw):
             bar.addWidget(b)
@@ -241,13 +303,43 @@ class Main(QMainWindow):
         foot.addWidget(self.status, 1)
 
         root = QVBoxLayout()
-        root.addLayout(bar)
-        root.addLayout(row)
-        root.addLayout(foot)
+        root.addLayout(bar, 0)
+        root.addLayout(row, 0)
+        root.addWidget(console_box, 1)
+        root.addLayout(foot, 0)
         w = QWidget()
         w.setLayout(root)
         self.setCentralWidget(w)
+        self.resize(self.sizeHint().width(), 430)
+
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(40)
+        self.poll_timer.timeout.connect(self._poll_device)
+
         self.connect(quiet=True)  # one attempt at app start, never again automatically
+
+    def log(self, text):
+        self.console.appendPlainText("[%s] %s" % (time.strftime("%H:%M:%S"), text))
+        sb = self.console.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def on_device_event(self, evt):
+        if evt.get("event") == "sw":
+            if evt.get("midi"):
+                self.log("<- SW%d %s -> MIDI: %s" % (evt["sw"], evt["action"], evt["midi"]))
+            else:
+                self.log("<- SW%d %s" % (evt["sw"], evt["action"]))
+
+    def _poll_device(self):
+        if not self.dev.ser:
+            self.poll_timer.stop()
+            return
+        try:
+            self.dev.poll_events()
+        except Exception as e:
+            self.disconnect()
+            self.status.setText("Error: %s" % e)
+            self.log("! Serial poll error: %s" % e)
 
     def set_led(self, on):
         c = "#2e7d32" if on else "#c62828"
@@ -255,12 +347,16 @@ class Main(QMainWindow):
 
     def toggle_connection(self):
         if self.dev.ser:
+            self.log("Button [Disconnect]: closing serial port")
             self.disconnect()
             self.status.setText("Disconnected")
         else:
+            self.log("Button [Connect]")
             self.connect()
 
     def disconnect(self):
+        if hasattr(self, "poll_timer"):
+            self.poll_timer.stop()
         self.dev.close()
         self.set_led(False)
         self.btn_conn.setText("Connect")
@@ -272,44 +368,57 @@ class Main(QMainWindow):
     def guard(self, fn):
         if not self.dev.ser:
             self.status.setText("Not connected - press Connect")
+            self.log("! Ignored: not connected")
             return
         try:
             fn()
         except Exception as e:
             self.disconnect()
             self.status.setText("Error: %s" % e)
+            self.log("! Error: %s" % e)
             QMessageBox.warning(self, "Device error", str(e))
 
     def connect(self, quiet=False):
         self.status.setText("Connecting...")
+        self.log("-> Probing USB serial ports (ping)...")
         QApplication.processEvents()
         port = self.dev.connect()
         if port:
             self.set_led(True)
             self.btn_conn.setText("Disconnect")
-            self.read()
+            self.log("<- Connected on %s (FW v%s, CRC %s)" % (port, self.dev.fw, self.dev.crc or "n/a"))
+            self.read(log_btn=False)
+            self.poll_timer.start()
             self.status.setText("Connected on %s (FW v%s) - settings loaded  [%s]"
                                 % (port, self.dev.fw, time.strftime("%H:%M:%S")))
         else:
             self.set_led(False)
             self.status.setText("Device not found (plugged in, not in BOOTSEL, no other program using the port?)")
+            self.log("! Device not found")
             if not quiet:
                 QMessageBox.warning(self, "Not found", self.status.text())
 
-    def read(self):
+    def read(self, _checked=False, *, log_btn=True):
         def f():
+            if log_btn:
+                self.log("Button [Read from device]")
+            self.log("-> Read settings (get)")
             cfg = self.dev.call({"cmd": "get"})["config"]
             for e, s in zip(self.editors, cfg["switches"]):
                 e.load(s)
+            self.log("<- Board settings: " + fmt_cfg(cfg["switches"]))
             self.status.setText("Settings read")
         self.guard(f)
 
     def write(self, _checked=False, *, confirm=True):
         def f():
+            self.log("Button [Write to device]")
+            self.log("-> Read current settings (get)")
             cur = self.dev.call({"cmd": "get"})["config"]["switches"]
             new = [e.dump() for e in self.editors]
             if cur == new:
                 self.status.setText("Settings on device already match the GUI")
+                self.log("= No changes (board already matches GUI)")
                 if confirm:
                     QMessageBox.information(
                         self,
@@ -332,13 +441,17 @@ class Main(QMainWindow):
                 )
                 if reply != QMessageBox.StandardButton.Yes:
                     self.status.setText("Write cancelled")
+                    self.log("x Write cancelled by user")
                     return
+            self.log("-> Write settings (set): " + fmt_cfg(new))
             self.dev.call({"cmd": "set", "config": {"switches": new}})
+            self.log("<- Settings saved to device")
             self.status.setText("Settings saved to device")
         self.guard(f)
 
     def reset(self, _checked=False, *, confirm=True):
         def f():
+            self.log("Button [Factory defaults]")
             if confirm:
                 reply = QMessageBox.question(
                     self,
@@ -350,15 +463,19 @@ class Main(QMainWindow):
                 )
                 if reply != QMessageBox.StandardButton.Yes:
                     self.status.setText("Factory reset cancelled")
+                    self.log("x Factory reset cancelled by user")
                     return
+            self.log("-> Reset to factory defaults (reset)")
             cfg = self.dev.call({"cmd": "reset"})["config"]
             for e, s in zip(self.editors, cfg["switches"]):
                 e.load(s)
+            self.log("<- Restored defaults: " + fmt_cfg(cfg["switches"]))
             self.status.setText("Defaults restored")
         self.guard(f)
 
     def update_fw(self, _checked=False, *, confirm=True):
         def f():
+            self.log("Button [Update firmware]")
             fw_path = BASE_DIR / "firmware" / "code.py"
             if not fw_path.exists():
                 raise RuntimeError("firmware/code.py not found")
@@ -367,10 +484,15 @@ class Main(QMainWindow):
             ping = self.dev.call({"cmd": "ping"})
             cur_fw = ping.get("fw", "?")
             cur_crc = ping.get("crc", "")
+            self.log(
+                "-> Check firmware (ping): board FW v%s (CRC %s), file FW v%s (CRC %s)"
+                % (cur_fw, cur_crc or "n/a", new_fw, new_crc)
+            )
 
             if cur_fw == new_fw and cur_crc and cur_crc == new_crc:
                 msg = "Firmware is already up to date (FW v%s, CRC %s)." % (cur_fw, cur_crc)
                 self.status.setText(msg)
+                self.log("= Firmware is already up to date")
                 if confirm:
                     QMessageBox.information(self, "Already up to date", msg)
                 return
@@ -397,12 +519,15 @@ class Main(QMainWindow):
                 )
                 if ans != QMessageBox.StandardButton.Yes:
                     self.status.setText("Firmware update cancelled")
+                    self.log("x Firmware update cancelled by user")
                     return
 
             self.status.setText("Uploading FW v%s to device..." % new_fw)
+            self.log("-> Uploading firmware v%s (%d bytes)... (fw_chunk + fw_commit)" % (new_fw, len(src)))
             QApplication.processEvents()
             self.dev.update_firmware(src)
             self.disconnect()
+            self.log("<- Firmware committed, rebooting device...")
             self.status.setText("Rebooting device with FW v%s..." % new_fw)
             QApplication.processEvents()
             time.sleep(1.8)

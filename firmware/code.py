@@ -2,12 +2,13 @@
 
 MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
 over the USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.2","crc":"..."}
+  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.3","crc":"..."}
   {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
   {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
   {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
   {"cmd":"fw_chunk","reset":bool,"data":"..."}    -> {"ok":true}   (buffers firmware over USB)
   {"cmd":"fw_commit"}                             -> {"ok":true}   (validates, writes /code.py, reloads)
+  (device -> host) {"event":"sw","sw":1..3,"action":"pressed"|"released","midi":"..."}
 """
 import binascii
 import json
@@ -19,7 +20,7 @@ import supervisor
 import usb_cdc
 import usb_midi
 
-FW_VERSION = "1.2"
+FW_VERSION = "1.3"
 CONFIG_FILE = "/config.json"
 PINS = (board.GP10, board.GP11, board.GP12)
 DEBOUNCE = 0.025
@@ -86,6 +87,11 @@ def save_config(cfg):
 config = load_config()
 midi = usb_midi.ports[1] if len(usb_midi.ports) > 1 else None
 serial = usb_cdc.data
+if serial:
+    try:
+        serial.write_timeout = 0.01
+    except Exception:
+        pass
 
 buttons = []
 for p in PINS:
@@ -97,7 +103,7 @@ state = [False] * 3        # debounced pressed state
 last_raw = [False] * 3
 last_change = [0.0] * 3
 toggled = [False] * 3
-active_press = [None] * 3  # (status_byte, number) held in momentary mode
+active_press = [None] * 3  # (status_byte, number, type, ch) held in momentary mode
 pc_current = [0] * 16      # per-channel program counter for pc_inc / pc_dec
 fw_buf = []
 
@@ -112,14 +118,20 @@ def on_press(i):
     ch = s["channel"] - 1
     t = s["type"]
     if t == "pc":
-        send(0xC0 | ch, s["number"])
-        pc_current[ch] = s["number"]
+        num = s["number"]
+        send(0xC0 | ch, num)
+        pc_current[ch] = num
+        midi_desc = "PC #%d (Ch %d)" % (num, ch + 1)
     elif t == "pc_inc":
         pc_current[ch] = (pc_current[ch] + 1) % 128
-        send(0xC0 | ch, pc_current[ch])
+        num = pc_current[ch]
+        send(0xC0 | ch, num)
+        midi_desc = "PC +1 -> #%d (Ch %d)" % (num, ch + 1)
     elif t == "pc_dec":
         pc_current[ch] = (pc_current[ch] - 1) % 128
-        send(0xC0 | ch, pc_current[ch])
+        num = pc_current[ch]
+        send(0xC0 | ch, num)
+        midi_desc = "PC -1 -> #%d (Ch %d)" % (num, ch + 1)
     else:
         status = (0xB0 if t == "cc" else 0x90) | ch
         if s["mode"] == "toggle":
@@ -128,15 +140,23 @@ def on_press(i):
         else:
             val = s["value"]
             if s["mode"] == "momentary":
-                active_press[i] = (status, s["number"])
+                active_press[i] = (status, s["number"], t, ch + 1)
         send(status, s["number"], val)
+        midi_desc = "%s #%d = %d (%s, Ch %d)" % (
+            t.upper(), s["number"], val, s["mode"], ch + 1
+        )
+    notify({"event": "sw", "sw": i + 1, "action": "pressed", "midi": midi_desc})
 
 
 def on_release(i):
     if active_press[i] is not None:
-        status, num = active_press[i]
+        status, num, t, ch = active_press[i]
         active_press[i] = None
         send(status, num, 0)
+        midi_desc = "%s #%d = 0 (momentary, Ch %d)" % (t.upper(), num, ch)
+    else:
+        midi_desc = None
+    notify({"event": "sw", "sw": i + 1, "action": "released", "midi": midi_desc})
 
 
 rx = b""
@@ -144,7 +164,15 @@ rx = b""
 
 def reply(obj):
     if serial:
-        serial.write((json.dumps(obj) + "\n").encode())
+        try:
+            serial.write((json.dumps(obj) + "\n").encode())
+        except Exception:
+            pass
+
+
+def notify(obj):
+    if serial and getattr(serial, "connected", False):
+        reply(obj)
 
 
 def fw_crc():
