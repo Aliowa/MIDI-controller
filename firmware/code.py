@@ -2,10 +2,11 @@
 
 MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
 over the USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.3","crc":"..."}
+  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.4","crc":"..."}
   {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
   {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
   {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
+  {"cmd":"trig","sw":1..3,"action":"press"|"release"} -> {"ok":true} (fires switch MIDI)
   {"cmd":"fw_chunk","reset":bool,"data":"..."}    -> {"ok":true}   (buffers firmware over USB)
   {"cmd":"fw_commit"}                             -> {"ok":true}   (validates, writes /code.py, reloads)
   (device -> host) {"event":"sw","sw":1..3,"action":"pressed"|"released","midi":"..."}
@@ -20,7 +21,7 @@ import supervisor
 import usb_cdc
 import usb_midi
 
-FW_VERSION = "1.3"
+FW_VERSION = "1.4"
 CONFIG_FILE = "/config.json"
 PINS = (board.GP10, board.GP11, board.GP12)
 DEBOUNCE = 0.025
@@ -204,6 +205,13 @@ def handle(line):
             toggled[:] = [False] * 3
             save_config(config)
             reply({"ok": True, "config": config})
+        elif cmd == "trig":
+            idx = clamp(msg["sw"], 1, 3) - 1
+            if msg.get("action") == "release":
+                on_release(idx)
+            else:
+                on_press(idx)
+            reply({"ok": True})
         elif cmd == "fw_chunk":
             if msg.get("reset"):
                 fw_buf.clear()

@@ -220,6 +220,8 @@ class SwitchEditor(QGroupBox):
         for r, (name, w) in enumerate(fields):
             g.addWidget(QLabel(name), r, 0)
             g.addWidget(w, r, 1)
+        self.btn_test = QPushButton("Test switch (send MIDI)")
+        g.addWidget(self.btn_test, len(fields), 0, 1, 2)
         self.type.currentIndexChanged.connect(self._update)
         self._update()
 
@@ -271,6 +273,9 @@ class Main(QMainWindow):
         self.led.setFixedSize(18, 18)
         self.set_led(False)
         self.editors = [SwitchEditor(n) for n in NAMES]
+        for i, e in enumerate(self.editors):
+            e.btn_test.pressed.connect(lambda sw=i + 1: self.trig(sw, "press"))
+            e.btn_test.released.connect(lambda sw=i + 1: self.trig(sw, "release"))
 
         self.btn_conn = QPushButton("Connect")
         self.btn_conn.clicked.connect(self.toggle_connection)
@@ -408,6 +413,13 @@ class Main(QMainWindow):
                 e.load(s)
             self.log("<- Board settings: " + fmt_cfg(cfg["switches"]))
             self.status.setText("Settings read")
+        self.guard(f)
+
+    def trig(self, sw, action):
+        def f():
+            if action == "press":
+                self.log("Button [Test SW%d]: triggering press on board" % sw)
+            self.dev.call({"cmd": "trig", "sw": sw, "action": action})
         self.guard(f)
 
     def write(self, _checked=False, *, confirm=True):
