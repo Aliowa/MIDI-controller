@@ -2,13 +2,14 @@
 
 MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
 over the USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.1"}
+  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.1","crc":"..."}
   {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
   {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
   {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
   {"cmd":"fw_chunk","reset":bool,"data":"..."}    -> {"ok":true}   (buffers firmware over USB)
   {"cmd":"fw_commit"}                             -> {"ok":true}   (validates, writes /code.py, reloads)
 """
+import binascii
 import json
 import time
 
@@ -146,13 +147,22 @@ def reply(obj):
         serial.write((json.dumps(obj) + "\n").encode())
 
 
+def fw_crc():
+    try:
+        with open("/code.py", "rb") as f:
+            data = f.read().replace(b"\r\n", b"\n")
+        return "%08x" % (binascii.crc32(data) & 0xFFFFFFFF)
+    except Exception:
+        return ""
+
+
 def handle(line):
     global config
     try:
         msg = json.loads(line)
         cmd = msg.get("cmd")
         if cmd == "ping":
-            reply({"ok": True, "fw": FW_VERSION})
+            reply({"ok": True, "fw": FW_VERSION, "crc": fw_crc()})
         elif cmd == "get":
             reply({"ok": True, "config": config})
         elif cmd == "set":

@@ -1,6 +1,8 @@
 """MIDI footswitch programmer (Windows / macOS). Talks JSON-lines to the Pico data port."""
 import base64
+import binascii
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -40,10 +42,19 @@ MODES = [
 NAMES = ["Switch 1", "Switch 2", "Switch 3"]
 
 
+def inspect_firmware(src):
+    norm = src.replace("\r\n", "\n")
+    m = re.search(r'^FW_VERSION\s*=\s*["\']([^"\']+)["\']', norm, re.MULTILINE)
+    fw = m.group(1) if m else "?"
+    crc = "%08x" % (binascii.crc32(norm.encode("utf-8")) & 0xFFFFFFFF)
+    return fw, crc
+
+
 class Device:
     def __init__(self):
         self.ser = None
         self.fw = None
+        self.crc = None
 
     def connect(self):
         """Probe CircuitPython serial ports (data port first) for a ping reply."""
@@ -59,7 +70,9 @@ class Device:
                 if b'"fw"' in line:
                     s.timeout = 3
                     self.ser = s
-                    self.fw = json.loads(line.decode()).get("fw", "?")
+                    info = json.loads(line.decode())
+                    self.fw = info.get("fw", "?")
+                    self.crc = info.get("crc", "")
                     return p.device
                 s.close()
             except (serial.SerialException, OSError, ValueError):
@@ -71,6 +84,7 @@ class Device:
             self.ser.close()
             self.ser = None
         self.fw = None
+        self.crc = None
 
     def call(self, msg):
         self.ser.reset_input_buffer()
@@ -293,16 +307,53 @@ class Main(QMainWindow):
             self.status.setText("Defaults restored")
         self.guard(f)
 
-    def update_fw(self):
+    def update_fw(self, _checked=False, *, confirm=True):
         def f():
             fw_path = BASE_DIR / "firmware" / "code.py"
             if not fw_path.exists():
                 raise RuntimeError("firmware/code.py not found")
-            self.status.setText("Uploading firmware to device...")
+            src = fw_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+            new_fw, new_crc = inspect_firmware(src)
+            ping = self.dev.call({"cmd": "ping"})
+            cur_fw = ping.get("fw", "?")
+            cur_crc = ping.get("crc", "")
+
+            if cur_fw == new_fw and cur_crc and cur_crc == new_crc:
+                msg = "Firmware is already up to date (FW v%s, CRC %s)." % (cur_fw, cur_crc)
+                self.status.setText(msg)
+                if confirm:
+                    QMessageBox.information(self, "Already up to date", msg)
+                return
+
+            if confirm:
+                note = " (code modified, same version)" if cur_fw == new_fw else ""
+                prompt = (
+                    "Update firmware on the board?\n\n"
+                    "Current on board:   FW v%s%s\n"
+                    "New (firmware/code.py): FW v%s (CRC %s)%s"
+                    % (
+                        cur_fw,
+                        " (CRC %s)" % cur_crc if cur_crc else "",
+                        new_fw,
+                        new_crc,
+                        note,
+                    )
+                )
+                ans = QMessageBox.question(
+                    self,
+                    "Confirm firmware update",
+                    prompt,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    self.status.setText("Firmware update cancelled")
+                    return
+
+            self.status.setText("Uploading FW v%s to device..." % new_fw)
             QApplication.processEvents()
-            self.dev.update_firmware(fw_path.read_text(encoding="utf-8"))
+            self.dev.update_firmware(src)
             self.disconnect()
-            self.status.setText("Rebooting device with new firmware...")
+            self.status.setText("Rebooting device with FW v%s..." % new_fw)
             QApplication.processEvents()
             time.sleep(1.8)
             self.connect()

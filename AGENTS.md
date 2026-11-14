@@ -69,7 +69,7 @@ Settings in `config.json` are kept across updates. If the drive is read-only ("m
 ## Serial protocol (data port, 115200, one JSON object per line)
 
 ```
-{"cmd":"ping"}                               -> {"ok":true,"fw":"1.1"}
+{"cmd":"ping"}                               -> {"ok":true,"fw":"1.1","crc":"..."}
 {"cmd":"get"}                                -> {"ok":true,"config":{"switches":[...3...]}}
 {"cmd":"set","config":{...}}                 -> {"ok":true}     (validated, saved to /config.json)
 {"cmd":"reset"}                              -> {"ok":true,"config":{...}}
