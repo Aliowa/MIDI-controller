@@ -69,15 +69,20 @@ Settings in `config.json` are kept across updates. If the drive is read-only ("m
 ## Serial protocol (data port, 115200, one JSON object per line)
 
 ```
-{"cmd":"ping"}                               -> {"ok":true,"fw":"1.2","crc":"..."}
-{"cmd":"get"}                                -> {"ok":true,"config":{"switches":[...3...]}}
-{"cmd":"set","config":{...}}                 -> {"ok":true}     (validated, saved to /config.json)
-{"cmd":"reset"}                              -> {"ok":true,"config":{...}}
-{"cmd":"fw_chunk","reset":bool,"data":"..."} -> {"ok":true}     (buffers firmware in RAM)
-{"cmd":"fw_commit"}                          -> {"ok":true}     (syntax-checks, writes /code.py, reloads)
+{"cmd":"ping"}                                     -> {"ok":true,"fw":"1.4","crc":"..."}
+{"cmd":"get"}                                      -> {"ok":true,"config":{"switches":[...3...]}}
+{"cmd":"set","config":{...}}                       -> {"ok":true}     (validated, saved to /config.json)
+{"cmd":"reset"}                                    -> {"ok":true,"config":{...}}
+{"cmd":"trig","sw":1..3,"action":"press"|"release"} -> {"ok":true}    (fires switch MIDI)
+{"cmd":"fw_chunk","reset":bool,"data":"..."}       -> {"ok":true}     (buffers firmware in RAM)
+{"cmd":"fw_commit"}                                -> {"ok":true}     (syntax-checks, writes /code.py, reloads)
+(device -> host when data port connected)          -> {"event":"sw","sw":1..3,"action":"pressed"|"released","midi":str|null}
 ```
 
 Switch fields: `type` (`pc|pc_inc|pc_dec|cc|note`), `channel` 1-16, `number` 0-127, `value` 0-127, `mode` (`momentary|toggle|trigger`).
+
+- `pc`, `pc_inc`, `pc_dec`: Program Change fires once on press (`value` and `mode` are unused; `number` is unused for `pc_inc`/`pc_dec`).
+- `cc`, `note`: `momentary` sends `value` on press and `0` on release; `toggle` alternates `value` and `0` across presses (nothing on release); `trigger` sends `value` on press only.
 
 ## Debugging checklist (mac or any host)
 

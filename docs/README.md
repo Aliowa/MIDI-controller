@@ -30,6 +30,18 @@ Pin 13 is a GND pin right next to GP10-GP12. Terminal polarity doesn't matter on
 
 Leave GP4, GP5, 3V3 and pins 36/38 unused until a screen is added.
 
+## Switch Settings (GUI Programmer)
+
+Each switch configuration is saved to `/config.json` on the Pico and controls both the physical footswitch and the GUI **Test switch (send MIDI)** button:
+
+- **When `Message` is `Program Change` (`fixed`, `+1`, or `-1`)**:
+  - Standard MIDI Program Change messages (`0xC0`) only contain a preset number (`0–127`) — they do not have a `Value` or an ON/OFF release state. They always fire once when you step down, so `Value` and `Mode` are disabled (`Number` is also disabled for `+1` / `-1`).
+- **When `Message` is `Control Change (CC)` or `Note`**:
+  - `Value` (`0–127`) and `Mode` are enabled. `Mode` tells the firmware (`firmware/code.py`) how the physical momentary footswitch behaves:
+    1. **Momentary (`value on press, 0 on release`)**: Sends `Value` (e.g. `127`) when you step down, and `0` when you lift your foot.
+    2. **Toggle (`value / 0 alternating`)**: 1st press sends `Value` (`127`), 2nd press sends `0` (nothing sent when you lift your foot).
+    3. **Trigger (`value on press only`)**: Sends `Value` (`127`) every time you step down (nothing sent when you lift your foot).
+
 ## USB & Firmware Updates
 
 The micro-USB cable to the PC carries power, USB-MIDI, and the serial configuration channel. Neural DSP and Reaper see the board as a MIDI input (`CircuitPython Audio`).
