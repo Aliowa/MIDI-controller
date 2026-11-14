@@ -37,4 +37,4 @@ The micro-USB cable to the PC carries both power and USB-MIDI. Neural DSP should
 
 ## Icon
 
-Rocket Launch icon from Google Material Symbols (Apache 2.0) on a gradient tile. Sources in `assets/`.
+Rocket Launch icon from Google Material Symbols (Apache 2.0), modified (recolored, on a gradient tile). Sources in `assets/`. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
