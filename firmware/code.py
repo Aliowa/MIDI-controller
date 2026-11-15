@@ -2,13 +2,14 @@
 
 MIDI goes out over USB-MIDI. Settings and firmware updates are sent from the GUI
 over the USB serial "data" channel using one JSON message per line:
-  {"cmd":"ping"}                                  -> {"ok":true,"fw":"1.4","crc":"..."}
-  {"cmd":"get"}                                   -> {"ok":true,"config":{...}}
-  {"cmd":"set","config":{...}}                    -> {"ok":true}   (validated + saved)
-  {"cmd":"reset"}                                 -> {"ok":true,"config":{...}} (defaults)
+  {"cmd":"ping"}                                     -> {"ok":true,"fw":"1.5","crc":"...","name":"..."}
+  {"cmd":"get"}                                      -> {"ok":true,"config":{...}}
+  {"cmd":"set","config":{...}}                       -> {"ok":true}   (validated + saved)
+  {"cmd":"reset"}                                    -> {"ok":true,"config":{...}} (defaults)
+  {"cmd":"rename","name":"..."}                      -> {"ok":true,"name":"..."} (saves name + hard-resets USB)
   {"cmd":"trig","sw":1..3,"action":"press"|"release"} -> {"ok":true} (fires switch MIDI)
-  {"cmd":"fw_chunk","reset":bool,"data":"..."}    -> {"ok":true}   (buffers firmware over USB)
-  {"cmd":"fw_commit"}                             -> {"ok":true}   (validates, writes /code.py, reloads)
+  {"cmd":"fw_chunk","reset":bool,"data":"..."}       -> {"ok":true}   (buffers firmware over USB)
+  {"cmd":"fw_commit"}                                -> {"ok":true}   (validates, writes /code.py, reloads)
   (device -> host) {"event":"sw","sw":1..3,"action":"pressed"|"released","midi":"..."}
 """
 import binascii
@@ -21,24 +22,78 @@ import supervisor
 import usb_cdc
 import usb_midi
 
-FW_VERSION = "1.4"
+FW_VERSION = "1.5"
+DEFAULT_NAME = "MIDI Footswitch"
 CONFIG_FILE = "/config.json"
 PINS = (board.GP10, board.GP11, board.GP12)
 DEBOUNCE = 0.025
 MAX_RX = 4096
 
+BOOT_PY = """# boot.py - runs once at power-up, before USB starts.
+# Normal mode : the board is writable by the code (GUI can save settings),
+#               CIRCUITPY drive is read-only for the PC.
+# Dev mode    : hold SW1 (GP10) while plugging in -> PC can edit files on CIRCUITPY.
+import binascii
+import json
+import board
+import digitalio
+import storage
+import supervisor
+import usb_cdc
+import usb_midi
+
+name = "MIDI Footswitch"
+try:
+    with open("/config.json") as f:
+        raw = json.load(f).get("name", "")
+    clean = "".join(c for c in str(raw).strip() if 32 <= ord(c) < 127)[:28].strip()
+    if clean:
+        name = clean
+except Exception:
+    pass
+
+try:
+    pid = 0x4000 | (binascii.crc32(name.encode("utf-8")) & 0x3FFF)
+    supervisor.set_usb_identification(
+        manufacturer="Aliowa",
+        product=name,
+        vid=0x239A,
+        pid=pid,
+    )
+    usb_midi.set_names(audio_control_interface_name=name)
+except Exception:
+    pass
+
+usb_midi.enable()
+usb_cdc.enable(console=True, data=True)  # data channel = config link to the GUI
+
+dev = digitalio.DigitalInOut(board.GP10)
+dev.switch_to_input(pull=digitalio.Pull.UP)
+dev_mode = not dev.value  # pressed = LOW
+dev.deinit()
+
+if not dev_mode:
+    storage.remount("/", readonly=False)
+"""
+
 # type: pc | pc_inc | pc_dec | cc | note
 # mode (cc/note): momentary (value on press, 0 on release) | toggle | trigger
 DEFAULT_CONFIG = {
+    "name": DEFAULT_NAME,
     "switches": [
         {"type": "pc_dec", "channel": 1, "number": 0, "value": 127, "mode": "trigger"},
         {"type": "pc_inc", "channel": 1, "number": 0, "value": 127, "mode": "trigger"},
         {"type": "cc", "channel": 1, "number": 64, "value": 127, "mode": "momentary"},
-    ]
+    ],
 }
 
 TYPES = ("pc", "pc_inc", "pc_dec", "cc", "note")
 MODES = ("momentary", "toggle", "trigger")
+
+
+def clean_name(val):
+    s = "".join(c for c in str(val or "").strip() if 32 <= ord(c) < 127)[:28].strip()
+    return s or DEFAULT_NAME
 
 
 def clamp(v, lo, hi):
@@ -60,7 +115,8 @@ def validate(cfg):
             "value": clamp(s["value"], 0, 127),
             "mode": s["mode"],
         })
-    return {"switches": out}
+    fallback = config.get("name", DEFAULT_NAME) if "config" in globals() else DEFAULT_NAME
+    return {"name": clean_name(cfg.get("name", fallback)), "switches": out}
 
 
 def load_config():
@@ -83,6 +139,25 @@ def write_flash(path, text):
 
 def save_config(cfg):
     write_flash(CONFIG_FILE, json.dumps(cfg))
+
+
+def _ensure_boot_py():
+    try:
+        with open("/boot.py") as f:
+            cur = f.read().replace("\r\n", "\n")
+    except Exception:
+        cur = ""
+    if cur != BOOT_PY:
+        try:
+            write_flash("/boot.py", BOOT_PY)
+            time.sleep(0.1)
+            import microcontroller
+            microcontroller.reset()
+        except Exception:
+            pass
+
+
+_ensure_boot_py()
 
 
 config = load_config()
@@ -191,7 +266,7 @@ def handle(line):
         msg = json.loads(line)
         cmd = msg.get("cmd")
         if cmd == "ping":
-            reply({"ok": True, "fw": FW_VERSION, "crc": fw_crc()})
+            reply({"ok": True, "fw": FW_VERSION, "crc": fw_crc(), "name": config.get("name", DEFAULT_NAME)})
         elif cmd == "get":
             reply({"ok": True, "config": config})
         elif cmd == "set":
@@ -201,10 +276,19 @@ def handle(line):
             save_config(new)
             reply({"ok": True})
         elif cmd == "reset":
+            cur_name = config.get("name", DEFAULT_NAME)
             config = json.loads(json.dumps(DEFAULT_CONFIG))
+            config["name"] = cur_name
             toggled[:] = [False] * 3
             save_config(config)
             reply({"ok": True, "config": config})
+        elif cmd == "rename":
+            config["name"] = clean_name(msg.get("name", ""))
+            save_config(config)
+            reply({"ok": True, "name": config["name"]})
+            time.sleep(0.05)
+            import microcontroller
+            microcontroller.reset()
         elif cmd == "trig":
             idx = clamp(msg["sw"], 1, 3) - 1
             if msg.get("action") == "release":

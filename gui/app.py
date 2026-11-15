@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -45,6 +46,10 @@ MODES = [
 NAMES = ["Switch 1", "Switch 2", "Switch 3"]
 
 
+def clean_name(val):
+    return "".join(c for c in str(val or "").strip() if 32 <= ord(c) < 127)[:28].strip()
+
+
 def inspect_firmware(src):
     norm = src.replace("\r\n", "\n")
     m = re.search(r'^FW_VERSION\s*=\s*["\']([^"\']+)["\']', norm, re.MULTILINE)
@@ -56,17 +61,64 @@ def inspect_firmware(src):
 class Device:
     def __init__(self, on_event=None):
         self.ser = None
+        self.port = None
         self.fw = None
         self.crc = None
+        self.name = "MIDI Footswitch"
         self.on_event = on_event
         self._rx = b""
 
-    def connect(self):
-        """Probe CircuitPython serial ports (data port first) for a ping reply."""
-        self.close()
+    def _candidate_ports(self):
         ports = [p for p in list_ports.comports() if p.vid == 0x239A]
         # Prefer the second CDC interface (data port) so we don't poke the REPL console first
         ports.sort(key=lambda p: (not (p.location or "").endswith(".0"), p.device), reverse=True)
+        return ports
+
+    def scan(self):
+        """Return list of connected pedals: [{'port', 'name', 'fw', 'crc'}]."""
+        found = []
+        seen_locs = set()
+        for p in self._candidate_ports():
+            base_loc = (p.location or "").rsplit(".", 1)[0] if p.location else None
+            if base_loc and base_loc in seen_locs:
+                continue
+            if self.ser and p.device == self.port:
+                found.append({
+                    "port": self.port,
+                    "name": self.name or "MIDI Footswitch",
+                    "fw": self.fw or "?",
+                    "crc": self.crc or "",
+                })
+                if base_loc:
+                    seen_locs.add(base_loc)
+                continue
+            try:
+                s = serial.Serial(p.device, 115200, timeout=0.6, write_timeout=1)
+                s.dtr = True
+                s.reset_input_buffer()
+                s.write(b'{"cmd":"ping"}\n')
+                line = s.readline()
+                s.close()
+                if b'"fw"' in line:
+                    info = json.loads(line.decode())
+                    found.append({
+                        "port": p.device,
+                        "name": info.get("name") or "MIDI Footswitch",
+                        "fw": info.get("fw", "?"),
+                        "crc": info.get("crc", ""),
+                    })
+                    if base_loc:
+                        seen_locs.add(base_loc)
+            except (serial.SerialException, OSError, ValueError):
+                pass
+        return found
+
+    def connect(self, target_port=None, prefer_name=None):
+        """Probe CircuitPython serial ports (data port first) for a ping reply."""
+        self.close()
+        ports = self._candidate_ports()
+        if target_port:
+            ports = [p for p in ports if p.device == target_port]
         for p in ports:
             try:
                 s = serial.Serial(p.device, 115200, timeout=0.6, write_timeout=1)
@@ -75,12 +127,18 @@ class Device:
                 s.write(b'{"cmd":"ping"}\n')
                 line = s.readline()
                 if b'"fw"' in line:
+                    info = json.loads(line.decode())
+                    dev_name = info.get("name") or "MIDI Footswitch"
+                    if prefer_name and dev_name != prefer_name:
+                        s.close()
+                        continue
                     s.timeout = 3
                     self.ser = s
                     self._rx = b""
-                    info = json.loads(line.decode())
+                    self.port = p.device
                     self.fw = info.get("fw", "?")
                     self.crc = info.get("crc", "")
+                    self.name = dev_name
                     return p.device
                 s.close()
             except (serial.SerialException, OSError, ValueError):
@@ -96,8 +154,10 @@ class Device:
             self.ser.close()
             self.ser = None
         self._rx = b""
+        self.port = None
         self.fw = None
         self.crc = None
+        self.name = None
 
     def poll_events(self):
         if not self.ser:
@@ -277,6 +337,25 @@ class Main(QMainWindow):
             e.btn_test.pressed.connect(lambda sw=i + 1: self.trig(sw, "press"))
             e.btn_test.released.connect(lambda sw=i + 1: self.trig(sw, "release"))
 
+        self.dev_combo = QComboBox()
+        self.dev_combo.setMinimumWidth(220)
+        self.dev_combo.activated.connect(self.on_select_device)
+        btn_scan = QPushButton("Refresh")
+        btn_scan.clicked.connect(self.refresh_devices)
+        self.name_edit = QLineEdit()
+        self.name_edit.setMaxLength(28)
+        self.name_edit.setPlaceholderText("MIDI Footswitch")
+        btn_rename = QPushButton("Rename pedal")
+        btn_rename.clicked.connect(self.rename_pedal)
+
+        dev_bar = QHBoxLayout()
+        dev_bar.addWidget(QLabel("Pedal:"))
+        dev_bar.addWidget(self.dev_combo, 1)
+        dev_bar.addWidget(btn_scan)
+        dev_bar.addWidget(QLabel("MIDI Name:"))
+        dev_bar.addWidget(self.name_edit, 1)
+        dev_bar.addWidget(btn_rename)
+
         self.btn_conn = QPushButton("Connect")
         self.btn_conn.clicked.connect(self.toggle_connection)
         btn_read = QPushButton("Read from device")
@@ -308,6 +387,7 @@ class Main(QMainWindow):
         foot.addWidget(self.status, 1)
 
         root = QVBoxLayout()
+        root.addLayout(dev_bar, 0)
         root.addLayout(bar, 0)
         root.addLayout(row, 0)
         root.addWidget(console_box, 1)
@@ -315,7 +395,7 @@ class Main(QMainWindow):
         w = QWidget()
         w.setLayout(root)
         self.setCentralWidget(w)
-        self.resize(self.sizeHint().width(), 430)
+        self.resize(self.sizeHint().width(), 470)
 
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(40)
@@ -350,14 +430,41 @@ class Main(QMainWindow):
         c = "#2e7d32" if on else "#c62828"
         self.led.setStyleSheet("background:%s; border-radius:9px; border:1px solid #333;" % c)
 
+    def refresh_devices(self, _checked=False, *, log_scan=True):
+        devices = self.dev.scan()
+        self.dev_combo.blockSignals(True)
+        self.dev_combo.clear()
+        for d in devices:
+            label = "%s (%s, FW v%s)" % (d["name"], d["port"], d["fw"])
+            self.dev_combo.addItem(label, d["port"])
+        if self.dev.port:
+            idx = self.dev_combo.findData(self.dev.port)
+            if idx >= 0:
+                self.dev_combo.setCurrentIndex(idx)
+        self.dev_combo.blockSignals(False)
+        if log_scan:
+            if devices:
+                summary = ", ".join("%s (%s)" % (d["name"], d["port"]) for d in devices)
+                self.log("= Found %d pedal(s): %s" % (len(devices), summary))
+            else:
+                self.log("! Scan: no pedals found")
+
+    def on_select_device(self, idx):
+        port = self.dev_combo.itemData(idx)
+        if port and port != self.dev.port:
+            self.log("-> Selected pedal on %s" % port)
+            self.connect(target_port=port)
+
     def toggle_connection(self):
         if self.dev.ser:
             self.log("Button [Disconnect]: closing serial port")
             self.disconnect()
             self.status.setText("Disconnected")
         else:
+            port = self.dev_combo.currentData()
             self.log("Button [Connect]")
-            self.connect()
+            if not (port and self.connect(target_port=port, quiet=True)):
+                self.connect()
 
     def disconnect(self):
         if hasattr(self, "poll_timer"):
@@ -383,25 +490,41 @@ class Main(QMainWindow):
             self.log("! Error: %s" % e)
             QMessageBox.warning(self, "Device error", str(e))
 
-    def connect(self, quiet=False):
+    def connect(self, quiet=False, target_port=None, prefer_name=None, log_probe=True):
         self.status.setText("Connecting...")
-        self.log("-> Probing USB serial ports (ping)...")
+        if log_probe:
+            self.log("-> Probing USB serial ports (ping)...")
         QApplication.processEvents()
-        port = self.dev.connect()
+        port = self.dev.connect(target_port=target_port, prefer_name=prefer_name)
         if port:
             self.set_led(True)
             self.btn_conn.setText("Disconnect")
-            self.log("<- Connected on %s (FW v%s, CRC %s)" % (port, self.dev.fw, self.dev.crc or "n/a"))
+            self.name_edit.setText(self.dev.name or "MIDI Footswitch")
+            self.log("<- Connected '%s' on %s (FW v%s, CRC %s)"
+                     % (self.dev.name, port, self.dev.fw, self.dev.crc or "n/a"))
             self.read(log_btn=False)
+            self.refresh_devices(log_scan=False)
             self.poll_timer.start()
-            self.status.setText("Connected on %s (FW v%s) - settings loaded  [%s]"
-                                % (port, self.dev.fw, time.strftime("%H:%M:%S")))
-        else:
-            self.set_led(False)
-            self.status.setText("Device not found (plugged in, not in BOOTSEL, no other program using the port?)")
+            self.status.setText("Connected '%s' on %s (FW v%s) - settings loaded  [%s]"
+                                % (self.dev.name, port, self.dev.fw, time.strftime("%H:%M:%S")))
+            return True
+        self.set_led(False)
+        self.status.setText("Device not found (plugged in, not in BOOTSEL, no other program using the port?)")
+        if log_probe:
             self.log("! Device not found")
-            if not quiet:
-                QMessageBox.warning(self, "Not found", self.status.text())
+        if not quiet:
+            QMessageBox.warning(self, "Not found", self.status.text())
+        return False
+
+    def _wait_reconnect(self, *, prefer_name=None, initial_delay=1.5, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        time.sleep(initial_delay)
+        while time.monotonic() < deadline:
+            QApplication.processEvents()
+            if self.connect(quiet=True, prefer_name=prefer_name, log_probe=False):
+                return True
+            time.sleep(0.4)
+        return self.connect(prefer_name=prefer_name)
 
     def read(self, _checked=False, *, log_btn=True):
         def f():
@@ -420,6 +543,51 @@ class Main(QMainWindow):
             if action == "press":
                 self.log("Button [Test SW%d]: triggering press on board" % sw)
             self.dev.call({"cmd": "trig", "sw": sw, "action": action})
+        self.guard(f)
+
+    def rename_pedal(self, _checked=False, *, confirm=True):
+        def f():
+            self.log("Button [Rename pedal]")
+            new_name = clean_name(self.name_edit.text())
+            if not new_name:
+                msg = "Please enter a non-empty MIDI name (up to 28 ASCII characters)."
+                self.status.setText(msg)
+                self.log("! " + msg)
+                if confirm:
+                    QMessageBox.warning(self, "Invalid name", msg)
+                return
+            self.name_edit.setText(new_name)
+            cur_name = self.dev.name or "MIDI Footswitch"
+            if new_name == cur_name:
+                msg = "MIDI name is already '%s'." % cur_name
+                self.status.setText(msg)
+                self.log("= MIDI name unchanged ('%s')" % cur_name)
+                if confirm:
+                    QMessageBox.information(self, "No changes", msg)
+                return
+            if confirm:
+                ans = QMessageBox.question(
+                    self,
+                    "Confirm rename pedal",
+                    "Rename this pedal and restart its USB connection?\n\n"
+                    "Current MIDI name: %s\n"
+                    "New MIDI name:     %s\n\n"
+                    "The pedal will reboot so Windows / macOS / DAWs see the new USB-MIDI device name."
+                    % (cur_name, new_name),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if ans != QMessageBox.StandardButton.Yes:
+                    self.status.setText("Rename cancelled")
+                    self.log("x Rename cancelled by user")
+                    return
+            self.log("-> Rename pedal (rename): '%s' -> '%s'" % (cur_name, new_name))
+            self.dev.call({"cmd": "rename", "name": new_name})
+            self.disconnect()
+            self.log("<- Renamed, rebooting USB device...")
+            self.status.setText("Rebooting pedal as '%s'..." % new_name)
+            QApplication.processEvents()
+            self._wait_reconnect(prefer_name=new_name)
         self.guard(f)
 
     def write(self, _checked=False, *, confirm=True):
@@ -456,7 +624,10 @@ class Main(QMainWindow):
                     self.log("x Write cancelled by user")
                     return
             self.log("-> Write settings (set): " + fmt_cfg(new))
-            self.dev.call({"cmd": "set", "config": {"switches": new}})
+            self.dev.call({
+                "cmd": "set",
+                "config": {"name": self.dev.name or "MIDI Footswitch", "switches": new},
+            })
             self.log("<- Settings saved to device")
             self.status.setText("Settings saved to device")
         self.guard(f)
@@ -542,8 +713,7 @@ class Main(QMainWindow):
             self.log("<- Firmware committed, rebooting device...")
             self.status.setText("Rebooting device with FW v%s..." % new_fw)
             QApplication.processEvents()
-            time.sleep(1.8)
-            self.connect()
+            self._wait_reconnect(initial_delay=2.0, timeout=10.0)
         self.guard(f)
 
 
